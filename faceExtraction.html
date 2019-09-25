@@ -115,6 +115,36 @@
         <!-- mtcnn_controls -->
     </div>
     <script>
+    let faceMatcher = null;
+
+    const classes = ['howard', 'raj', 'sheldon', 'colincole', 'nayanbirnbach', 'oliversmith']
+
+    function getFaceImageUri(className, idx) {
+        //console.log(`faces/${className}.${idx}.png)
+        return `faces/${className}.${idx}.png`
+    }
+    async function createFaceMatcher(numImagesForTraining = 1) {
+        const maxAvailableImagesPerClass = 5
+        numImagesForTraining = Math.min(numImagesForTraining, maxAvailableImagesPerClass)
+
+        const labeledFaceDescriptors = await Promise.all(classes.map(
+            async className => {
+                const descriptors = []
+                for (let i = 1; i < (numImagesForTraining + 1); i++) {
+                    const img = await faceapi.fetchImage(getFaceImageUri(className, i))
+                    descriptors.push(await faceapi.computeFaceDescriptor(img))
+                }
+
+                return new faceapi.LabeledFaceDescriptors(
+                    className,
+                    descriptors
+                )
+            }
+        ))
+
+        return new faceapi.FaceMatcher(labeledFaceDescriptors)
+    }
+
     async function updateResults() {
         if (!isFaceDetectionModelLoaded()) {
             return
@@ -126,21 +156,43 @@
         const detections = await faceapi.detectAllFaces(inputImgEl, options)
         const faceImages = await faceapi.extractFaces(inputImgEl, detections)
 
-        displayExtractedFaces(faceImages)
+        const results = await faceapi
+            .detectAllFaces(inputImgEl, options)
+            .withFaceLandmarks()
+            .withFaceDescriptors()
+
+        counter = 0;
+        results.forEach(({ detection, descriptor }) => {
+            const label = faceMatcher.findBestMatch(descriptor).toString()
+            const options = { label }
+            faceImages[counter].label = label;
+            counter++
+        })
+        displayExtractedFaces(faceImages, results)
     }
 
-    function displayExtractedFaces(faceImages) {
+
+
+    function displayExtractedFaces(faceImages, results) {
         const canvas = $('#overlay').get(0)
         faceapi.matchDimensions(canvas, $('#inputImg').get(0))
 
         $('#facesContainer').empty()
-        faceImages.forEach(canvas => $('#facesContainer').append(canvas))
+        counter = 0;
+        faceImages.forEach(canvas => {
+            $('#facesContainer').append(canvas);
+            $('#facesContainer').append(canvas.label)
+            counter++;
+        })
     }
 
     async function run() {
         // load face detection model
         await changeFaceDetector(selectedFaceDetector)
-
+        await faceapi.loadFaceLandmarkModel('/weights')
+        await faceapi.loadFaceRecognitionModel('/weights')
+        // initialize face matcher with 1 reference descriptor per bbt character
+        faceMatcher = await createFaceMatcher(1)
         // start processing image
         updateResults()
     }
@@ -150,6 +202,17 @@
         const img = await faceapi.bufferToImage(imgFile)
         $('#inputImg').get(0).src = img.src
         updateResults()
+    }
+
+    function uploadCanvas(canvas) {
+        var photo = canvas.toDataURL('image/jpeg');
+        $.ajax({
+            method: 'POST',
+            url: 'uploadFace.php',
+            data: {
+                photo: photo
+            }
+        });
     }
 
     $(document).ready(function() {
